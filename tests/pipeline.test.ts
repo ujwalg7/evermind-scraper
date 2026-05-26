@@ -2,12 +2,22 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseHtml, isLikelyLowQualityCapture, parseMarkdownMetadata, extractTier5, extractTier6, toCliExtractionOutput, runExtractionPipeline } from '../src/extractor';
+import * as extractor from '../src/extractor';
 import { formatNoteMarkdown, writeNoteToVault } from '../src/vault';
 import { localizeImages } from '../src/images';
 import { CanonicalNote } from '../src/types';
 import axios from 'axios';
 import { chromium } from 'playwright';
+
+const {
+  parseHtml,
+  isLikelyLowQualityCapture,
+  parseMarkdownMetadata,
+  extractTier5,
+  extractTier6,
+  toCliExtractionOutput,
+  runExtractionPipeline
+} = extractor;
 
 describe('Article-to-Obsidian Pipeline Tests', () => {
   const fixturesDir = path.join(__dirname, 'fixtures');
@@ -292,6 +302,55 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
     } finally {
       axios.get = originalGet;
       chromium.launch = originalLaunch;
+    }
+  });
+
+  it('should attempt Tier 4 Crawl4AI when earlier tiers are insufficient', async () => {
+    const originalGet = axios.get;
+    const originalLaunch = chromium.launch;
+    const originalExecFile = extractor.__crawl4AITools.execFileAsync;
+    const crawl4Payload = JSON.stringify({
+      title: 'Crawl4AI Title',
+      content: 'This is a robust crawl4ai capture with enough content and enough words to pass confidence checks. '.repeat(12),
+      author: 'Crawler Bot',
+      publishedDate: '2026-05-25',
+      images: []
+    });
+
+    axios.get = (async (): Promise<any> => {
+      return {
+        data: `<html><head><title>Short Article</title></head><body><p>Too short</p></body></html>`
+      };
+    }) as any;
+
+    chromium.launch = (async (): Promise<any> => {
+      throw new Error('playwright unavailable');
+    }) as any;
+
+    extractor.__crawl4AITools.execFileAsync = (async () => {
+      return {
+        stdout: `${extractor.__crawl4AITools.jsonMarkerStart}\n${crawl4Payload}\n${extractor.__crawl4AITools.jsonMarkerEnd}\n`
+      } as any;
+    }) as any;
+
+    try {
+      const config = {
+        vaultPath: '/mock/vault',
+        inboxSubdir: 'inbox',
+        attachmentsSubdir: 'attachments',
+        fallbackThreshold: 0.6
+      };
+
+      const { note, tierUsed } = await runExtractionPipeline('https://example.com/crawl4a', config);
+
+      assert.strictEqual(tierUsed, 4);
+      assert.strictEqual(note.title, 'Crawl4AI Title');
+      assert.strictEqual(note.author, 'Crawler Bot');
+      assert.strictEqual(note.publishedDate, '2026-05-25');
+    } finally {
+      axios.get = originalGet;
+      chromium.launch = originalLaunch;
+      extractor.__crawl4AITools.execFileAsync = originalExecFile;
     }
   });
 

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional
-
 from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Literal, Optional
 
 IngestionStatus = Literal["curated", "needs-review", "rejected"]
 CuratedFormat = Literal["atomic-takeaways", "structured-brief", "minimal-digest"]
@@ -33,6 +32,7 @@ class CuratedNote(BaseModel):
   confidence: ConfidenceLevel
   temporal_relevance: TemporalRelevance
   source_url: str = Field(min_length=1)
+  source_metadata: Dict[str, Any] = Field(default_factory=dict)
   raw_source: str
   captured_at: str
   reviewed_at: str
@@ -41,6 +41,7 @@ class CuratedNote(BaseModel):
   contradicts: List[str] = Field(default_factory=list)
   tags: List[str] = Field(default_factory=list)
   source_content: str = ""
+  why_it_matters: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -52,4 +53,4 @@ class RawCapture:
   capture_status: Literal["complete", "partial", "needs_review"]
   captured_at: str = ""
   fingerprint: Optional[str] = None
-  raw_frontmatter: Optional[dict] = None
+  raw_frontmatter: Optional[Dict[str, object]] = None

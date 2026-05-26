@@ -25,6 +25,16 @@ export function toCliExtractionOutput(url: string, note: CanonicalNote): CliExtr
 }
 
 const execFileAsync = promisify(execFile);
+const CRAWL4AI_JSON_MARKER_START = '__EVERMIND_CRAWL4AI_JSON_START__';
+const CRAWL4AI_JSON_MARKER_END = '__EVERMIND_CRAWL4AI_JSON_END__';
+
+const crawl4AIRuntime = {
+  execFileAsync,
+  jsonMarkerStart: CRAWL4AI_JSON_MARKER_START,
+  jsonMarkerEnd: CRAWL4AI_JSON_MARKER_END
+};
+
+export const __crawl4AITools = crawl4AIRuntime;
 
 const LOW_QUALITY_PATTERNS = [
   'enable javascript',
@@ -47,10 +57,9 @@ const LOW_QUALITY_PATTERNS = [
   'cookie wall',
   'cookie policy',
   'captcha',
-  'cloudflare',
-  'not found',
-  '404',
-  'error 404'
+  'page not found',
+  '404 error',
+  '404 page not found'
 ];
 
 // Configure Turndown for clean, structure-faithful Markdown conversion
@@ -468,7 +477,10 @@ function buildCanonicalFromMarkdown(
 
 async function isCrawl4AIAvailable(): Promise<boolean> {
   try {
-    await execFileAsync(process.platform === 'win32' ? 'python' : 'python3', ['-c', 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("crawl4ai") else 1)']);
+    await crawl4AIRuntime.execFileAsync(
+      process.platform === 'win32' ? 'python' : 'python3',
+      ['-c', 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("crawl4ai") else 1)']
+    );
     return true;
   } catch {
     return false;
@@ -514,18 +526,28 @@ async def run():
     'publishedDate': getattr(result, 'published', '') or getattr(result, 'publishedDate', '') or '',
     'images': images
   }
+  print('${CRAWL4AI_JSON_MARKER_START}')
   print(json.dumps(payload))
+  print('${CRAWL4AI_JSON_MARKER_END}')
 
 asyncio.run(run())
 `.trim();
 
-  const { stdout } = await execFileAsync(pythonExecutable, ['-c', script], { timeout: 25000 });
-  const jsonMatch = stdout.match(/\{[\s\S]*\}$/);
-  if (!jsonMatch) {
+  const { stdout } = await crawl4AIRuntime.execFileAsync(pythonExecutable, ['-c', script], { timeout: 25000 });
+  const start = stdout.indexOf(CRAWL4AI_JSON_MARKER_START);
+  const end = stdout.lastIndexOf(CRAWL4AI_JSON_MARKER_END);
+  if (start === -1 || end === -1 || end <= start) {
     throw new Error('Crawl4AI did not return structured JSON');
   }
 
-  const parsed = JSON.parse(jsonMatch[0]);
+  const jsonText = stdout
+    .slice(start + CRAWL4AI_JSON_MARKER_START.length, end)
+    .trim();
+  if (!jsonText) {
+    throw new Error('Crawl4AI did not return structured JSON');
+  }
+
+  const parsed = JSON.parse(jsonText);
   const content = (parsed.content || '').trim();
   if (!content) {
     throw new Error('Crawl4AI returned empty article content');

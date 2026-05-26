@@ -6,20 +6,20 @@ from typing import List
 
 from .models import QCDecision
 
-
 LOW_QUALITY_PATTERNS = [
-  "page not found",
-  "site not found",
-  "can't be found",
-  "404",
-  "just a moment",
+    "checking your browser before accessing",
+    "please solve the captcha",
   "cookie wall",
   "accept all cookies",
   "subscribe to read",
+    "register to read",
   "sign in to continue",
-  "captcha",
-  "cloudflare",
-  "checking your browser before accessing",
+    "create an account to read",
+    "continue reading with a digital subscription",
+    "please verify you are human",
+    "verifying your browser",
+    "not authorized",
+    "access denied",
 ]
 
 
@@ -41,7 +41,8 @@ def classify_capture_quality(
     )
 
   normalized_text = (title + " " + source_url + " " + content).lower()
-  is_low_quality_shell = any(pattern in normalized_text for pattern in LOW_QUALITY_PATTERNS)
+  normalized_preview = normalized_text[:512]
+  is_low_quality_shell = any(pattern in normalized_preview for pattern in LOW_QUALITY_PATTERNS)
 
   if not content.strip():
     return QCDecision(
@@ -53,10 +54,15 @@ def classify_capture_quality(
     )
 
   words = re.findall(r"\w+", content.lower())
-  if len(words) < 60 or is_low_quality_shell:
+  if is_low_quality_shell:
     reason_list.append(
-      "Very short or low-quality article body. Potential paywall/cookie wall/security shell."
+        "Detected a potential paywall/cookie wall/captcha/security shell signal."
     )
+  if len(words) < 60:
+      reason_list.append("Article body is very short and may be incomplete.")
+      is_low_quality_shell = True
+
+  if is_low_quality_shell:
     return QCDecision(
       status="needs-review",
       confidence="low",

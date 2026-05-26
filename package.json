@@ -7,11 +7,11 @@
     "evermind": "./dist/src/cli.js"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc",
-    "package": "rm -rf dist && tsc && npx pkg . --targets node18-macos --public --no-bytecode --output bin/evermind && npx pkg . --targets node18-linux-arm64 --public --no-bytecode --output bin/evermind-linux-arm64",
+    "build": "node -e \"const fs = require('fs'); fs.rmSync('dist', { recursive: true, force: true });\" && tsc",
+    "package": "node -e \"const fs = require('fs'); fs.rmSync('dist', { recursive: true, force: true });\" && tsc && npx pkg . --targets node18-macos --public --no-bytecode --output bin/evermind && npx pkg . --targets node18-linux-arm64 --public --no-bytecode --output bin/evermind-linux-arm64",
     "start": "ts-node src/cli.ts",
     "cli": "node dist/src/cli.js",
-    "test": "rm -rf dist && tsc && mkdir -p dist/tests/fixtures && cp tests/fixtures/*.html dist/tests/fixtures/ && node --test dist/tests/**/*.test.js"
+    "test": "node -e \"const fs = require('fs'); fs.rmSync('dist', { recursive: true, force: true });\" && tsc && node -e \"const fs = require('fs'); fs.mkdirSync('dist/tests/fixtures', { recursive: true }); fs.cpSync('tests/fixtures', 'dist/tests/fixtures', { recursive: true });\" && node --test dist/tests/**/*.test.js"
   },
   "dependencies": {
     "@mozilla/readability": "^0.5.0",

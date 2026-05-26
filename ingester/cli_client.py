@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -34,7 +35,27 @@ class EvermindCliClient:
 
   def _normalize_command(self) -> list[str]:
     if self.cli_path.startswith("node "):
-      return self.cli_path.split(" ")
+        parsed = shlex.split(self.cli_path, posix=os.name != "nt")
+        if len(parsed) <= 2:
+            return parsed
+
+        # Handle non-quoted path segments where shell-like splitting over-splits
+        # a CLI path containing spaces, e.g.
+        #   node /Users/me/Project Name/dist/src/cli.js extract ...
+        remaining = self.cli_path[len("node "):].strip()
+        remaining_parts = shlex.split(remaining, posix=os.name != "nt")
+        best_match: Optional[list[str]] = None
+        for cutoff in range(len(remaining_parts), 0, -1):
+            candidate = " ".join(remaining_parts[:cutoff])
+            if Path(candidate).exists():
+                best_match = [candidate] + remaining_parts[cutoff:]
+                break
+
+        if best_match is None:
+            if not any(part.startswith("-") for part in remaining_parts):
+                return ["node", remaining]
+            return parsed
+        return ["node"] + best_match
     return [self.cli_path]
 
   def extract(self, url: str, tier: Optional[int] = None) -> Dict[str, Any]:

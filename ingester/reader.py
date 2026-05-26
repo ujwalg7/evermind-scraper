@@ -1,16 +1,40 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from .models import RawCapture
 
+try:
+    import yaml  # type: ignore[import-untyped]
+except Exception:  # pragma: no cover - fallback for environments without PyYAML
+    yaml = None  # type: ignore[assignment]
 
-def parse_frontmatter_and_body(md_text: str) -> Tuple[Dict[str, str], str]:
+
+def _coerce_frontmatter_value(value: Any) -> Any:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "on"}:
+            return True
+        if normalized in {"false", "no", "off"}:
+            return False
+        try:
+            if normalized.isdigit():
+                return int(normalized)
+            return float(normalized)
+        except ValueError:
+            return value
+        return value
+    if isinstance(value, (int, float, bool, list, dict)) or value is None:
+        return value
+    return str(value)
+
+
+def parse_frontmatter_and_body(md_text: str) -> Tuple[Dict[str, Any], str]:
   if not md_text.startswith("---"):
     return {}, md_text
 
-  lines = md_text.splitlines()
+  lines = md_text.split("\n")
   if len(lines) < 2:
     return {}, md_text
 
@@ -23,16 +47,53 @@ def parse_frontmatter_and_body(md_text: str) -> Tuple[Dict[str, str], str]:
     return {}, md_text
 
   frontmatter = {}
-  for raw_line in lines[1:end_idx]:
-    line = raw_line.strip()
-    if not line or line.startswith("#") or line.startswith("- "):
-      continue
-    if ":" not in line:
-      continue
-    key, value = line.split(":", 1)
-    frontmatter[key.strip()] = value.strip().strip('"')
+  frontmatter_text = "\n".join(lines[1:end_idx])
+  if yaml is not None:
+      try:
+          parsed = yaml.safe_load(frontmatter_text)
+          if isinstance(parsed, dict):
+              frontmatter = {str(key): _coerce_frontmatter_value(value) for key, value in parsed.items()}
+          else:
+              frontmatter = {}
+      except Exception:
+          frontmatter = {}
 
-  body = "\n".join(lines[end_idx + 1 :]).lstrip("\n")
+  if not frontmatter:
+      current_list_key: Optional[str] = None
+      for raw_line in lines[1:end_idx]:
+          if not raw_line.strip():
+              continue
+
+          line = raw_line.rstrip()
+          stripped_line = line.strip()
+          if stripped_line.startswith("#"):
+              continue
+
+          if raw_line.startswith("  - ") and current_list_key is not None:
+              item = stripped_line[2:].strip()
+              if item.startswith(("'", '"')) and item.endswith(item[0]) and len(item) >= 2:
+                  item = item[1:-1]
+              existing = frontmatter.get(current_list_key)
+              if isinstance(existing, list):
+                  existing.append(_coerce_frontmatter_value(item))
+              continue
+
+          if ":" not in line:
+              continue
+
+          key, value = line.split(":", 1)
+          key = key.strip()
+          value = value.strip()
+          if not value:
+              frontmatter[key] = []
+              current_list_key = key
+              continue
+          if value.startswith(("'", '"')) and value.endswith(value[0]) and len(value) >= 2:
+              value = value[1:-1]
+          current_list_key = None
+          frontmatter[key] = _coerce_frontmatter_value(value)
+
+  body = "\n".join(lines[end_idx + 1:])
   return frontmatter, body
 
 
