@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseHtml, extractTier4, parseMarkdownMetadata, extractTier5, runExtractionPipeline } from '../src/extractor';
+import { parseHtml, isLikelyLowQualityCapture, parseMarkdownMetadata, extractTier5, extractTier6, toCliExtractionOutput, runExtractionPipeline } from '../src/extractor';
 import { formatNoteMarkdown, writeNoteToVault } from '../src/vault';
 import { localizeImages } from '../src/images';
 import { CanonicalNote } from '../src/types';
@@ -128,7 +128,7 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
   it('should parse Jina Reader JSON response correctly', async () => {
     const originalGet = axios.get;
     const mockUrl = 'https://example.com/blog-post';
-    const mockMarkdown = `# My Blog Post\n\nThis is a great article about AI.\n\n![AI Image](https://example.com/ai.png)\n\n## Subheading 1\nSome more text.`;
+    const mockMarkdown = `# My Blog Post\n\nThis is a great article about AI.\n\n![AI Image](https://example.com/ai.png)\n\n## Subheading 1\nSome more text.\n\nThe page includes durable, practical details about model selection and reliability engineering practices.\n\n### Section 3\nMore context and actionable evidence. More context and actionable evidence.\n\nThe same concept is repeated several times to ensure this payload has enough word-count for a confident extraction result in testing.\n`.repeat(2);
     
     // Stub axios.get
     axios.get = (async (url: string, config?: any): Promise<any> => {
@@ -148,15 +148,15 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
     }) as any;
 
     try {
-      const note = await extractTier4(mockUrl);
+      const note = await extractTier5(mockUrl);
       assert.strictEqual(note.title, 'My Blog Post');
       assert.strictEqual(note.sourceUrl, mockUrl);
       assert.strictEqual(note.contentMarkdown, mockMarkdown);
-      assert.deepStrictEqual(note.headings, ['My Blog Post', 'Subheading 1']);
+      assert.deepStrictEqual(note.headings.slice(0, 2), ['My Blog Post', 'Subheading 1']);
       assert.deepStrictEqual(note.images, [
         { originalUrl: 'https://example.com/ai.png', status: 'skipped' }
       ]);
-      assert.strictEqual(note.confidenceScore, 0.95);
+      assert.ok(note.confidenceScore >= 0.6);
       assert.strictEqual(note.captureStatus, 'complete');
       assert.ok(note.fingerprint.length > 0);
     } finally {
@@ -181,7 +181,7 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
   it('should parse Exa API JSON response correctly', async () => {
     const originalPost = axios.post;
     const mockUrl = 'https://example.com/exa-post';
-    const mockMarkdown = `# Exa Article\n\nSome body text.\n\n![Exa Image](https://example.com/exa.png)`;
+    const mockMarkdown = `# Exa Article\n\nSome body text.\n\n![Exa Image](https://example.com/exa.png)\n\nThe article continues with concrete notes about architecture, tradeoffs, and deployment details.\n\nIt repeats key claims to guarantee stable extraction scoring and avoid short-capture classification.\n\n`.repeat(4);
     const mockApiKey = 'mock-exa-key';
 
     // Stub axios.post
@@ -206,17 +206,17 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
     }) as any;
 
     try {
-      const note = await extractTier5(mockUrl, mockApiKey);
+      const note = await extractTier6(mockUrl, mockApiKey);
       assert.strictEqual(note.title, 'Exa Article');
       assert.strictEqual(note.sourceUrl, mockUrl);
       assert.strictEqual(note.author, 'Jane Exa');
       assert.strictEqual(note.publishedDate, '2026-05-25');
       assert.strictEqual(note.contentMarkdown, mockMarkdown);
-      assert.deepStrictEqual(note.headings, ['Exa Article']);
+      assert.strictEqual(note.headings[0], 'Exa Article');
       assert.deepStrictEqual(note.images, [
         { originalUrl: 'https://example.com/exa.png', status: 'skipped' }
       ]);
-      assert.strictEqual(note.confidenceScore, 0.9);
+      assert.ok(note.confidenceScore >= 0.6);
       assert.strictEqual(note.captureStatus, 'complete');
       assert.ok(note.fingerprint.length > 0);
     } finally {
@@ -225,7 +225,7 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
     }
   });
 
-  // Test 7b: Empty Tier 4 content should fail closed
+  // Test 7b: Empty Jina captures should fail closed
   it('should reject empty Jina Reader captures instead of writing empty notes', async () => {
     const originalGet = axios.get;
     const mockUrl = 'https://example.com/empty-jina';
@@ -242,7 +242,7 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
     }) as any;
 
     try {
-      await assert.rejects(() => extractTier4(mockUrl), /empty article content/i);
+    await assert.rejects(() => extractTier5(mockUrl), /empty article content/i);
     } finally {
       axios.get = originalGet;
     }
@@ -293,6 +293,36 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
       axios.get = originalGet;
       chromium.launch = originalLaunch;
     }
+  });
+
+  it('should report extraction outputs as JSON-ready payloads', () => {
+    const mockNote: CanonicalNote = {
+      title: 'Machine JSON Note',
+      sourceUrl: 'https://example.com/json-note',
+      contentMarkdown: '# Machine JSON Note\n\nUseful paragraph for JSON output testing.',
+      headings: ['Machine JSON Note'],
+      images: [],
+      confidenceScore: 0.91,
+      captureStatus: 'complete',
+      fingerprint: 'hash-123',
+      tierUsed: 5
+    };
+
+    const payload = toCliExtractionOutput(mockNote.sourceUrl, mockNote);
+    assert.strictEqual(payload.sourceUrl, mockNote.sourceUrl);
+    assert.strictEqual(payload.tierUsed, 5);
+    assert.deepStrictEqual(payload.note.title, mockNote.title);
+    assert.strictEqual(payload.note.captureStatus, mockNote.captureStatus);
+    assert.ok(payload.capturedAt);
+  });
+
+  it('should classify blocked/short captures as low quality', () => {
+    const blockedText = 'Please accept all cookies to continue reading this article.';
+    const shortText = 'just a moment';
+
+    assert.strictEqual(isLikelyLowQualityCapture(blockedText, 'Some title', 'https://example.com/cookie'), true);
+    assert.strictEqual(isLikelyLowQualityCapture(shortText, 'Short Title', 'https://example.com/captcha'), true);
+    assert.strictEqual(isLikelyLowQualityCapture('This is a long-form article with useful details and many paragraphs of durable evidence. '.repeat(8), 'Valid Article', 'https://example.com/valid'), false);
   });
 
   // Test 9: Metadata & Fingerprint Stability

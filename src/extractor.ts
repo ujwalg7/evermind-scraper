@@ -3,8 +3,55 @@ import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { chromium } from 'playwright';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import * as crypto from 'crypto';
 import { CanonicalNote, ImageInfo, Config } from './types';
+
+export interface CliExtractionOutput {
+  sourceUrl: string;
+  tierUsed: number;
+  note: CanonicalNote;
+  capturedAt: string;
+}
+
+export function toCliExtractionOutput(url: string, note: CanonicalNote): CliExtractionOutput {
+  return {
+    sourceUrl: url,
+    tierUsed: note.tierUsed || 0,
+    note,
+    capturedAt: new Date().toISOString()
+  };
+}
+
+const execFileAsync = promisify(execFile);
+
+const LOW_QUALITY_PATTERNS = [
+  'enable javascript',
+  'javascript is disabled',
+  'cookies policy',
+  'accept all cookies',
+  'subscribe to read',
+  'register to read',
+  'sign in to continue',
+  'create an account to read',
+  'continue reading with a digital subscription',
+  'exclusive content for subscribers',
+  'verify you are a human',
+  'checking your browser before accessing',
+  'please solve the captcha',
+  'just a moment',
+  'page can\'t be found',
+  'page cannot be found',
+  'site not found',
+  'cookie wall',
+  'cookie policy',
+  'captcha',
+  'cloudflare',
+  'not found',
+  '404',
+  'error 404'
+];
 
 // Configure Turndown for clean, structure-faithful Markdown conversion
 const turndownService = new TurndownService({
@@ -90,23 +137,7 @@ function normalizeTitle(rawTitle: string, url: string): string {
  */
 function detectPaywallOrCookieWall(text: string): boolean {
   const lowercaseText = text.toLowerCase();
-  const badPatterns = [
-    'enable javascript',
-    'javascript is disabled',
-    'cookies policy',
-    'accept all cookies',
-    'subscribe to read',
-    'register to read',
-    'sign in to continue',
-    'create an account to read',
-    'continue reading with a digital subscription',
-    'exclusive content for subscribers',
-    'verify you are a human',
-    'checking your browser before accessing',
-    'please solve the captcha'
-  ];
-
-  for (const pattern of badPatterns) {
+  for (const pattern of LOW_QUALITY_PATTERNS) {
     if (lowercaseText.includes(pattern)) {
       return true;
     }
@@ -126,13 +157,42 @@ function detectPaywallOrCookieWall(text: string): boolean {
 }
 
 /**
+ * Determines if a capture looks non-article-like or low quality.
+ */
+export function isLikelyLowQualityCapture(text: string, title: string = '', sourceUrl: string = ''): boolean {
+  const normalizedText = (text || '').toLowerCase();
+  const normalizedTitle = (title || '').toLowerCase();
+  const normalizedUrl = (sourceUrl || '').toLowerCase();
+  const combined = `${normalizedText} ${normalizedTitle} ${normalizedUrl}`.trim();
+
+  if (!combined) {
+    return true;
+  }
+
+  if (LOW_QUALITY_PATTERNS.some(pattern => combined.includes(pattern))) {
+    return true;
+  }
+
+  const wordCount = normalizedText.trim().split(/\s+/).filter(Boolean).length;
+  if (wordCount < 120) {
+    const blockers = ['subscribe', 'subscription', 'premium', 'log in', 'sign in', 'cookie', 'privacy policy', 'please'];
+    const matches = blockers.filter(word => combined.includes(word));
+    if (matches.length >= 2) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Calculates a confidence score for the extraction quality.
  */
-function calculateConfidence(title: string, textContent: string, hasMetadata: boolean): number {
+function calculateConfidence(title: string, textContent: string, hasMetadata: boolean, sourceUrl = ''): number {
   if (!title || title.trim() === '') return 0;
   if (!textContent || textContent.trim() === '') return 0;
 
-  if (detectPaywallOrCookieWall(textContent)) {
+  if (detectPaywallOrCookieWall(textContent) || isLikelyLowQualityCapture(textContent, title, sourceUrl)) {
     console.log('[Pipeline] Paywall or cookie wall detected in text. Forcing fallback.');
     return 0;
   }
@@ -314,7 +374,8 @@ export function parseHtml(html: string, url: string, fallbackThreshold = 0.6): C
   const confidenceScore = calculateConfidence(
     title, 
     article ? article.textContent : doc.body.textContent || '', 
-    metaData.hasMetadata
+    metaData.hasMetadata,
+    url
   );
 
   const fingerprint = calculateFingerprint(contentMarkdown);
@@ -367,6 +428,118 @@ export function parseMarkdownMetadata(markdown: string): { images: ImageInfo[]; 
   return { headings, images };
 }
 
+function shouldReturnFromPipeline(note: CanonicalNote, threshold: number): boolean {
+  return note.confidenceScore >= threshold && note.captureStatus !== 'partial';
+}
+
+function buildCanonicalFromMarkdown(
+  url: string,
+  title: string,
+  markdown: string,
+  threshold: number,
+  author = '',
+  publishedDate = '',
+  parsedImages: ImageInfo[] = []
+): CanonicalNote {
+  const parsed = parseMarkdownMetadata(markdown);
+  const resolvedTitle = normalizeTitle(title, url);
+  const confidenceScore = calculateConfidence(
+    resolvedTitle,
+    markdown,
+    parsed.images.length > 0 || parsedImages.length > 0,
+    url
+  );
+  const fingerprint = calculateFingerprint(markdown);
+
+  const mergedImages = parsed.images.length ? parsed.images : parsedImages;
+  return {
+    title: resolvedTitle,
+    sourceUrl: url,
+    author: author.trim() || undefined,
+    publishedDate: publishedDate.trim() || undefined,
+    contentMarkdown: markdown,
+    headings: parsed.headings,
+    images: mergedImages,
+    confidenceScore,
+    captureStatus: confidenceScore >= threshold && !isLikelyLowQualityCapture(markdown, resolvedTitle, url) ? 'complete' : 'partial',
+    fingerprint
+  };
+}
+
+async function isCrawl4AIAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync(process.platform === 'win32' ? 'python' : 'python3', ['-c', 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("crawl4ai") else 1)']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+class Crawl4AIDependencyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'Crawl4AIDependencyError';
+  }
+}
+
+async function extractWithCrawl4AI(url: string): Promise<{ title: string; content: string; author: string; publishedDate: string; images: string[] }> {
+  const pythonExecutable = process.platform === 'win32' ? 'python' : 'python3';
+  const script = `
+import asyncio
+import json
+
+async def run():
+  try:
+    from crawl4ai import AsyncWebCrawler
+  except Exception:
+    from crawl4ai.async_webcrawler import AsyncWebCrawler
+
+  async with AsyncWebCrawler() as crawler:
+    result = await crawler.arun(url=${JSON.stringify(url)})
+
+  images = []
+  for media in getattr(result, 'media', []) or []:
+    candidate = None
+    if isinstance(media, dict):
+      candidate = media.get('url') or media.get('src')
+    elif isinstance(media, str):
+      candidate = media
+    if candidate:
+      images.append(candidate)
+
+  payload = {
+    'title': getattr(result, 'title', '') or '',
+    'content': getattr(result, 'markdown', '') or '',
+    'author': getattr(result, 'author', '') or '',
+    'publishedDate': getattr(result, 'published', '') or getattr(result, 'publishedDate', '') or '',
+    'images': images
+  }
+  print(json.dumps(payload))
+
+asyncio.run(run())
+`.trim();
+
+  const { stdout } = await execFileAsync(pythonExecutable, ['-c', script], { timeout: 25000 });
+  const jsonMatch = stdout.match(/\{[\s\S]*\}$/);
+  if (!jsonMatch) {
+    throw new Error('Crawl4AI did not return structured JSON');
+  }
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  const content = (parsed.content || '').trim();
+  if (!content) {
+    throw new Error('Crawl4AI returned empty article content');
+  }
+
+  return {
+    title: parsed.title || '',
+    content,
+    author: parsed.author || '',
+    publishedDate: parsed.publishedDate || '',
+    images: Array.isArray(parsed.images) ? parsed.images.filter((entry: unknown) => typeof entry === 'string') : []
+  };
+}
+
 /**
  * Tier 2 - Deterministic HTML parser
  */
@@ -411,9 +584,34 @@ export async function extractTier3(url: string, threshold = 0.6): Promise<Canoni
 }
 
 /**
- * Tier 4 - Free Jina Reader API fallback (returns clean Markdown + Metadata via JSON)
+ * Tier 4 - Crawl4AI fallback (optional; requires python package)
  */
 export async function extractTier4(url: string): Promise<CanonicalNote> {
+  const crawl4AIAvailable = await isCrawl4AIAvailable();
+  if (!crawl4AIAvailable) {
+    throw new Crawl4AIDependencyError('Crawl4AI is not installed');
+  }
+
+  const result = await extractWithCrawl4AI(url);
+  const note = buildCanonicalFromMarkdown(url, result.title, result.content, 0.6, result.author, result.publishedDate);
+  const mergedUrls = new Set(note.images.map(image => image.originalUrl));
+  for (const rawImage of result.images) {
+    if (!mergedUrls.has(rawImage)) {
+      note.images.push({
+        originalUrl: rawImage,
+        status: 'skipped'
+      });
+      mergedUrls.add(rawImage);
+    }
+  }
+
+  return note;
+}
+
+/**
+ * Tier 5 - Jina Reader API fallback (returns clean Markdown + Metadata via JSON)
+ */
+export async function extractTier5(url: string, threshold = 0.6): Promise<CanonicalNote> {
   const response = await axios.get(`https://r.jina.ai/${url}`, {
     headers: {
       'Accept': 'application/json',
@@ -432,25 +630,14 @@ export async function extractTier4(url: string): Promise<CanonicalNote> {
   if (!markdown.trim()) {
     throw new Error('Jina Reader returned empty article content');
   }
-  const parsed = parseMarkdownMetadata(markdown);
-  const fingerprint = calculateFingerprint(markdown);
 
-  return {
-    title: normalizeTitle(title, url),
-    sourceUrl: url,
-    contentMarkdown: markdown,
-    headings: parsed.headings,
-    images: parsed.images,
-    confidenceScore: 0.95, // Jina is highly reliable
-    captureStatus: 'complete',
-    fingerprint
-  };
+  return buildCanonicalFromMarkdown(url, title || '', markdown, threshold);
 }
 
 /**
- * Tier 5 - Exa Contents API fallback (Optional fallback if exaApiKey is provided)
+ * Tier 6 - Exa Contents API fallback (Optional fallback if exaApiKey is provided)
  */
-export async function extractTier5(url: string, apiKey: string): Promise<CanonicalNote> {
+export async function extractTier6(url: string, apiKey: string, threshold = 0.6): Promise<CanonicalNote> {
   const response = await axios.post('https://api.exa.ai/contents', {
     urls: [url],
     text: true
@@ -472,21 +659,15 @@ export async function extractTier5(url: string, apiKey: string): Promise<Canonic
   if (!markdown.trim()) {
     throw new Error('Exa API returned empty article content');
   }
-  const parsed = parseMarkdownMetadata(markdown);
-  const fingerprint = calculateFingerprint(markdown);
 
-  return {
-    title: normalizeTitle(result.title, url),
-    sourceUrl: url,
-    author: result.author || undefined,
-    publishedDate: result.publishedDate || undefined,
-    contentMarkdown: markdown,
-    headings: parsed.headings,
-    images: parsed.images,
-    confidenceScore: 0.9, // Exa is highly reliable
-    captureStatus: 'complete',
-    fingerprint
-  };
+  return buildCanonicalFromMarkdown(
+    url,
+    result.title || '',
+    markdown,
+    threshold,
+    result.author || '',
+    result.publishedDate || ''
+  );
 }
 
 /**
@@ -494,13 +675,17 @@ export async function extractTier5(url: string, apiKey: string): Promise<Canonic
  */
 export async function runExtractionPipeline(url: string, config: Config): Promise<{ note: CanonicalNote; tierUsed: number }> {
   console.log(`[Pipeline] Starting extraction for URL: ${url}`);
+  let lastNote: CanonicalNote | null = null;
+  let lastTier = 0;
   
   // --- Tier 2: Deterministic HTML ---
   try {
     console.log('[Pipeline] Tier 2: Attempting raw HTML deterministic parsing...');
     const note = await extractTier2(url, config.fallbackThreshold);
+    lastNote = note;
+    lastTier = 2;
     console.log(`[Pipeline] Tier 2 confidence score: ${note.confidenceScore.toFixed(2)}`);
-    if (note.confidenceScore >= config.fallbackThreshold && note.captureStatus !== 'partial') {
+    if (shouldReturnFromPipeline(note, config.fallbackThreshold)) {
       return { note: { ...note, tierUsed: 2 }, tierUsed: 2 };
     }
     console.log(`[Pipeline] Tier 2 confidence below threshold (${config.fallbackThreshold}). Escalating to Tier 3.`);
@@ -513,8 +698,10 @@ export async function runExtractionPipeline(url: string, config: Config): Promis
   try {
     console.log('[Pipeline] Tier 3: Rendering page with Playwright...');
     tier3Note = await extractTier3(url, config.fallbackThreshold);
+    lastNote = tier3Note;
+    lastTier = 3;
     console.log(`[Pipeline] Tier 3 confidence score: ${tier3Note.confidenceScore.toFixed(2)}`);
-    if (tier3Note && tier3Note.confidenceScore >= config.fallbackThreshold && tier3Note.captureStatus !== 'partial') {
+    if (shouldReturnFromPipeline(tier3Note, config.fallbackThreshold)) {
       return { note: { ...tier3Note, tierUsed: 3 }, tierUsed: 3 };
     }
     console.log(`[Pipeline] Tier 3 confidence below threshold. Escalating to Tier 4.`);
@@ -522,40 +709,67 @@ export async function runExtractionPipeline(url: string, config: Config): Promis
     console.warn(`[Pipeline] Tier 3 extraction failed: ${err.message}. Escalating to Tier 4.`);
   }
 
-  // --- Tier 4: Jina Reader API (100% Free Fallback) ---
+  // --- Tier 4: Crawl4AI (optional fallback) ---
   try {
-    console.log('[Pipeline] Tier 4: Querying Jina Reader proxy (Free Fallback)...');
+    console.log('[Pipeline] Tier 4: Querying Crawl4AI fallback...');
     const note = await extractTier4(url);
-    return { note: { ...note, tierUsed: 4 }, tierUsed: 4 };
+    lastNote = note;
+    lastTier = 4;
+    if (shouldReturnFromPipeline(note, config.fallbackThreshold)) {
+      return { note: { ...note, tierUsed: 4 }, tierUsed: 4 };
+    }
+    console.log(`[Pipeline] Tier 4 capture low confidence. Escalating to Tier 5.`);
   } catch (err: any) {
-    console.error(`[Pipeline] Tier 4 Jina extraction failed: ${err.message}`);
+    if (err instanceof Crawl4AIDependencyError) {
+      console.log('[Pipeline] Crawl4AI unavailable. Skipping Tier 4.');
+    } else {
+      console.error(`[Pipeline] Tier 4 Crawl4AI extraction failed: ${err.message}`);
+    }
   }
 
-  // --- Tier 5: Exa Contents API (Optional Fallback) ---
+  // --- Tier 5: Jina Reader API (100% Free Fallback) ---
+  try {
+    console.log('[Pipeline] Tier 5: Querying Jina Reader proxy (Free Fallback)...');
+    const note = await extractTier5(url, config.fallbackThreshold);
+    lastNote = note;
+    lastTier = 5;
+    if (shouldReturnFromPipeline(note, config.fallbackThreshold)) {
+      return { note: { ...note, tierUsed: 5 }, tierUsed: 5 };
+    }
+    console.log(`[Pipeline] Tier 5 capture low confidence. Escalating to Tier 6.`);
+  } catch (err: any) {
+    console.error(`[Pipeline] Tier 5 Jina extraction failed: ${err.message}`);
+  }
+
+  // --- Tier 6: Exa Contents API (Optional Fallback) ---
   if (config.exaApiKey) {
     try {
-      console.log('[Pipeline] Tier 5: Querying Exa Contents API...');
-      const note = await extractTier5(url, config.exaApiKey);
-      return { note: { ...note, tierUsed: 5 }, tierUsed: 5 };
+      console.log('[Pipeline] Tier 6: Querying Exa Contents API...');
+      const note = await extractTier6(url, config.exaApiKey, config.fallbackThreshold);
+      lastNote = note;
+      lastTier = 6;
+      if (shouldReturnFromPipeline(note, config.fallbackThreshold)) {
+        return { note: { ...note, tierUsed: 6 }, tierUsed: 6 };
+      }
+      console.log('[Pipeline] Tier 6 capture low confidence. Falling back to best partial capture.');
     } catch (err: any) {
-      console.error(`[Pipeline] Tier 5 Exa extraction failed: ${err.message}`);
+      console.error(`[Pipeline] Tier 6 Exa extraction failed: ${err.message}`);
     }
   } else {
-    console.log('[Pipeline] Exa API key missing. Skipping Tier 5 fallback.');
+    console.log('[Pipeline] Exa API key missing. Skipping Tier 6 fallback.');
   }
 
   // Return the best attempt we have, but explicitly marked as partial/needs_review
-  if (tier3Note) {
-    console.log('[Pipeline] Fallback ladder completed. Returning Tier 3 result (partial/needs_review).');
-    const noteToReturn = tier3Note as CanonicalNote;
+  if (lastNote) {
+    console.log(`[Pipeline] Fallback ladder completed. Returning Tier ${lastTier} result (partial/needs_review).`);
     return { 
       note: { 
-        ...noteToReturn, 
-        tierUsed: 3, 
+        ...lastNote,
+        tierUsed: lastTier,
         captureStatus: 'partial',
-        extractionError: 'Escalated through all tiers. Playwright result was low confidence.'
+        extractionError: 'Escalated through all tiers. No fully confident tier result found.'
       }, 
-      tierUsed: 3 
+      tierUsed: lastTier
     };
   }
 
