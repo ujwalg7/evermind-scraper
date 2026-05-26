@@ -8,13 +8,12 @@
   },
   "scripts": {
     "build": "tsc",
-    "package": "tsc && npx pkg . --targets node18-macos --public --no-bytecode --output bin/evermind",
+    "package": "tsc && npx pkg . --targets node18-macos --public --no-bytecode --output bin/evermind && npx pkg . --targets node18-linux-arm64 --public --no-bytecode --output bin/evermind-linux-arm64",
     "start": "ts-node src/cli.ts",
     "cli": "node dist/src/cli.js",
     "test": "tsc && mkdir -p dist/tests/fixtures && cp tests/fixtures/*.html dist/tests/fixtures/ && node --test dist/tests/**/*.test.js"
   },
   "dependencies": {
-    "@google/genai": "^0.2.0",
     "@mozilla/readability": "^0.5.0",
     "axios": "^1.7.9",
     "commander": "^12.1.0",
