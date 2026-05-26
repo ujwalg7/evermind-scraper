@@ -107,6 +107,8 @@ program
   .option('-i, --inbox <subdir>', 'Override target inbox subdirectory (default: inbox/raw)')
   .option('-a, --attachments <subdir>', 'Override attachments subdirectory')
   .option('-d, --domain-filter <domains>', 'Comma-separated domains to match (e.g. infoworld.com,medium.com)')
+  .option('-l, --limit <number>', 'Maximum number of unpinned tabs to process', '10')
+  .option('--include-pinned', 'Include pinned tabs in the batch')
   .action(async (options) => {
     try {
       const config = loadConfig();
@@ -132,6 +134,15 @@ program
         });
         console.log(`[CLI] Filtering by domains [${options.domainFilter}]: processing ${filteredTabs.length} matching tab(s).`);
       }
+
+      if (!options.includePinned) {
+        filteredTabs = filteredTabs.filter(tab => !tab.pinned);
+        console.log(`[CLI] Skipping pinned tabs: processing ${filteredTabs.length} unpinned tab(s).`);
+      }
+
+      const limit = Math.max(1, parseInt(options.limit, 10) || 10);
+      filteredTabs = filteredTabs.slice(0, limit);
+      console.log(`[CLI] Limiting batch to first ${filteredTabs.length} tab(s).`);
 
       let successCount = 0;
       let failCount = 0;
