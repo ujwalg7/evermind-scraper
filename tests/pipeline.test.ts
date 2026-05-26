@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseHtml, extractTier4, parseMarkdownMetadata } from '../src/extractor';
+import { parseHtml, extractTier4, parseMarkdownMetadata, extractTier5 } from '../src/extractor';
 import { formatNoteMarkdown } from '../src/vault';
 import { localizeImages } from '../src/images';
 import { CanonicalNote } from '../src/types';
@@ -174,5 +174,53 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
       { originalUrl: 'https://example.com/1.jpg', status: 'skipped' },
       { originalUrl: 'https://example.com/2.jpg', status: 'skipped' }
     ]);
+  });
+
+  // Test 7: Exa API Parser and Fallback
+  it('should parse Exa API JSON response correctly', async () => {
+    const originalPost = axios.post;
+    const mockUrl = 'https://example.com/exa-post';
+    const mockMarkdown = `# Exa Article\n\nSome body text.\n\n![Exa Image](https://example.com/exa.png)`;
+    const mockApiKey = 'mock-exa-key';
+
+    // Stub axios.post
+    axios.post = (async (url: string, data?: any, config?: any): Promise<any> => {
+      assert.strictEqual(url, 'https://api.exa.ai/contents');
+      assert.deepStrictEqual(data, { urls: [mockUrl], text: true });
+      assert.deepStrictEqual(config?.headers, {
+        'x-api-key': mockApiKey,
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      });
+      return {
+        data: {
+          results: [{
+            title: 'Exa Article',
+            author: 'Jane Exa',
+            publishedDate: '2026-05-25',
+            text: mockMarkdown
+          }]
+        }
+      };
+    }) as any;
+
+    try {
+      const note = await extractTier5(mockUrl, mockApiKey);
+      assert.strictEqual(note.title, 'Exa Article');
+      assert.strictEqual(note.sourceUrl, mockUrl);
+      assert.strictEqual(note.author, 'Jane Exa');
+      assert.strictEqual(note.publishedDate, '2026-05-25');
+      assert.strictEqual(note.contentMarkdown, mockMarkdown);
+      assert.deepStrictEqual(note.headings, ['Exa Article']);
+      assert.deepStrictEqual(note.images, [
+        { originalUrl: 'https://example.com/exa.png', status: 'skipped' }
+      ]);
+      assert.strictEqual(note.confidenceScore, 0.9);
+      assert.strictEqual(note.captureStatus, 'complete');
+      assert.ok(note.fingerprint.length > 0);
+    } finally {
+      // Restore original post
+      axios.post = originalPost;
+    }
   });
 });

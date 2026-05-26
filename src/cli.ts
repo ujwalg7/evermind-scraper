@@ -1,9 +1,8 @@
 #!/usr/bin/env ts-node
 import { Command } from 'commander';
 import { loadConfig } from './config';
-import { runExtractionPipeline, extractTier2, extractTier3, extractTier4 } from './extractor';
+import { runExtractionPipeline, extractTier2, extractTier3, extractTier4, extractTier5 } from './extractor';
 import { localizeImages } from './images';
-import { synthesizeNote } from './llm';
 import { writeNoteToVault, postProcessVault } from './vault';
 import { CanonicalNote } from './types';
 import { getChromeTabs } from './tabs';
@@ -24,9 +23,7 @@ program
   .option('-v, --vault <path>', 'Override target Obsidian vault path')
   .option('-i, --inbox <subdir>', 'Override target inbox subdirectory (default: inbox/raw)')
   .option('-a, --attachments <subdir>', 'Override attachments subdirectory (default: attachments/evermind)')
-  .option('-t, --tier <number>', 'Force a specific extraction tier (2: Raw HTML, 3: Playwright, 4: Jina Reader)')
-  .option('--llm', 'Enable final LLM summary/takeaway synthesis (default: disabled)')
-  .option('--llm-model <model>', 'Override Ollama model (default: llama3)')
+  .option('-t, --tier <number>', 'Force a specific extraction tier (2: Raw HTML, 3: Playwright, 4: Jina Reader, 5: Exa)')
   .action(async (url, options) => {
     try {
       const config = loadConfig();
@@ -35,8 +32,6 @@ program
       if (options.vault) config.vaultPath = options.vault;
       if (options.inbox) config.inboxSubdir = options.inbox;
       if (options.attachments) config.attachmentsSubdir = options.attachments;
-      if (options.llm) config.runLlmSynthesis = true;
-      if (options.llmModel) config.ollamaModel = options.llmModel;
 
       console.log('--- Evermind Clip Start ---');
       console.log(`Vault Path: ${config.vaultPath}`);
@@ -59,6 +54,12 @@ program
         } else if (tier === 4) {
           note = await extractTier4(url);
           tierUsed = 4;
+        } else if (tier === 5) {
+          if (!config.exaApiKey) {
+            throw new Error('Exa API key is required to force Tier 5');
+          }
+          note = await extractTier5(url, config.exaApiKey);
+          tierUsed = 5;
         } else {
           throw new Error(`Invalid tier forced: ${options.tier}`);
         }
@@ -74,14 +75,24 @@ program
       // Localize Images
       note = await localizeImages(note, config.vaultPath, config.attachmentsSubdir);
 
-      // Optional LLM Polish (Ollama local model or Gemini)
-      if (config.runLlmSynthesis) {
-        note = await synthesizeNote(note, config);
-      }
-
       // Write to vault inbox
       const finalPath = await writeNoteToVault(note, config.vaultPath, config.inboxSubdir);
-      console.log(`[CLI] Clipped successfully. Saved to: ${finalPath}`);
+      
+      const localCount = note.images.filter(img => img.status === 'downloaded').length;
+      const failedCount = note.images.filter(img => img.status === 'failed').length;
+      const skippedCount = note.images.filter(img => img.status === 'skipped').length;
+
+      console.log('\n--- Capture Summary ---');
+      console.log(`Saved Path:      ${finalPath}`);
+      console.log(`Extraction Tier: Tier ${tierUsed}`);
+      console.log(`Capture Status:  ${note.captureStatus.toUpperCase()}`);
+      console.log(`Confidence:      ${note.confidenceScore.toFixed(2)}`);
+      console.log(`Fingerprint:     ${note.fingerprint}`);
+      console.log(`Images Localized: ${localCount} downloaded, ${failedCount} failed, ${skippedCount} skipped`);
+      if (note.extractionError) {
+        console.log(`Extraction Warning: ${note.extractionError}`);
+      }
+      console.log('------------------------\n');
       console.log('--- Evermind Clip Complete ---');
     } catch (err: any) {
       console.error(`[CLI Error] Clip failed: ${err.message}`);
@@ -95,8 +106,6 @@ program
   .option('-v, --vault <path>', 'Override target Obsidian vault path')
   .option('-i, --inbox <subdir>', 'Override target inbox subdirectory (default: inbox/raw)')
   .option('-a, --attachments <subdir>', 'Override attachments subdirectory')
-  .option('--llm', 'Enable final LLM summary/takeaway synthesis (default: disabled)')
-  .option('--llm-model <model>', 'Override Ollama model (default: llama3)')
   .option('-d, --domain-filter <domains>', 'Comma-separated domains to match (e.g. infoworld.com,medium.com)')
   .action(async (options) => {
     try {
@@ -105,8 +114,6 @@ program
       if (options.vault) config.vaultPath = options.vault;
       if (options.inbox) config.inboxSubdir = options.inbox;
       if (options.attachments) config.attachmentsSubdir = options.attachments;
-      if (options.llm) config.runLlmSynthesis = true;
-      if (options.llmModel) config.ollamaModel = options.llmModel;
 
       console.log('--- Evermind Ingest Chrome Tabs Start ---');
       const tabs = await getChromeTabs();
@@ -141,12 +148,7 @@ program
           // 2. Localize Images
           note = await localizeImages(note, config.vaultPath, config.attachmentsSubdir);
           
-          // 3. Optional LLM Polish
-          if (config.runLlmSynthesis) {
-            note = await synthesizeNote(note, config);
-          }
-          
-          // 4. Write
+          // 3. Write
           await writeNoteToVault(note, config.vaultPath, config.inboxSubdir);
           successCount++;
         } catch (err: any) {

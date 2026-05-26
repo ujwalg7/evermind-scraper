@@ -25,9 +25,6 @@ export interface Config {
   vaultPath: string; // Path to Obsidian Vault root
   inboxSubdir: string; // e.g. 'inbox/raw'
   attachmentsSubdir: string; // e.g., 'attachments/evermind'
-  geminiApiKey?: string;
-  ollamaHost: string; // defaults to http://localhost:11434
-  ollamaModel: string; // defaults to llama3
+  exaApiKey?: string;
   fallbackThreshold: number; // Score below which we fallback (default: 0.6)
-  runLlmSynthesis: boolean; // Whether to run LLM polish (default: false)
 }

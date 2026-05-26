@@ -416,6 +416,45 @@ export async function extractTier4(url: string): Promise<CanonicalNote> {
 }
 
 /**
+ * Tier 5 - Exa Contents API fallback (Optional fallback if exaApiKey is provided)
+ */
+export async function extractTier5(url: string, apiKey: string): Promise<CanonicalNote> {
+  const response = await axios.post('https://api.exa.ai/contents', {
+    urls: [url],
+    text: true
+  }, {
+    headers: {
+      'x-api-key': apiKey,
+      'Content-Type': 'application/json',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    },
+    timeout: 20000
+  });
+
+  if (!response.data || !response.data.results || response.data.results.length === 0) {
+    throw new Error('Exa API returned no results');
+  }
+
+  const result = response.data.results[0];
+  const markdown = result.text || '';
+  const parsed = parseMarkdownMetadata(markdown);
+  const fingerprint = calculateFingerprint(markdown);
+
+  return {
+    title: result.title || 'Untitled Article',
+    sourceUrl: url,
+    author: result.author || undefined,
+    publishedDate: result.publishedDate || undefined,
+    contentMarkdown: markdown,
+    headings: parsed.headings,
+    images: parsed.images,
+    confidenceScore: 0.9, // Exa is highly reliable
+    captureStatus: 'complete',
+    fingerprint
+  };
+}
+
+/**
  * Main orchestrator executing the fallback ladder
  */
 export async function runExtractionPipeline(url: string, config: Config): Promise<{ note: CanonicalNote; tierUsed: number }> {
@@ -454,21 +493,20 @@ export async function runExtractionPipeline(url: string, config: Config): Promis
     const note = await extractTier4(url);
     return { note: { ...note, tierUsed: 4 }, tierUsed: 4 };
   } catch (err: any) {
-    console.error(`[Pipeline] Tier 4 extraction failed: ${err.message}`);
-    
-    // If Jina failed but we have a Playwright note, return it as partial fallback
-    if (tier3Note) {
-      const noteToReturn = tier3Note as CanonicalNote;
-      return { 
-        note: { 
-          ...noteToReturn, 
-          tierUsed: 3, 
-          captureStatus: 'partial',
-          extractionError: `Tier 4 Jina failed: ${err.message}. Tier 3 Playwright was low confidence.`
-        }, 
-        tierUsed: 3 
-      };
+    console.error(`[Pipeline] Tier 4 Jina extraction failed: ${err.message}`);
+  }
+
+  // --- Tier 5: Exa Contents API (Optional Fallback) ---
+  if (config.exaApiKey) {
+    try {
+      console.log('[Pipeline] Tier 5: Querying Exa Contents API...');
+      const note = await extractTier5(url, config.exaApiKey);
+      return { note: { ...note, tierUsed: 5 }, tierUsed: 5 };
+    } catch (err: any) {
+      console.error(`[Pipeline] Tier 5 Exa extraction failed: ${err.message}`);
     }
+  } else {
+    console.log('[Pipeline] Exa API key missing. Skipping Tier 5 fallback.');
   }
 
   // Return the best attempt we have, but explicitly marked as partial/needs_review

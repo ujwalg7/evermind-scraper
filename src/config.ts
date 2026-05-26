@@ -10,11 +10,6 @@ const DEFAULT_VAULT_PATH = process.env.OBSIDIAN_VAULT_PATH || '';
 const DEFAULT_INBOX_SUBDIR = process.env.EVERMIND_INBOX_SUBDIR || 'inbox/raw';
 const DEFAULT_ATTACHMENTS_SUBDIR = process.env.EVERMIND_ATTACHMENTS_SUBDIR || 'attachments/evermind';
 const DEFAULT_THRESHOLD = parseFloat(process.env.EVERMIND_THRESHOLD || '0.6');
-const DEFAULT_RUN_LLM = process.env.EVERMIND_LLM_SYNTHESIS === 'true';
-
-// Local Ollama defaults
-const DEFAULT_OLLAMA_HOST = process.env.EVERMIND_OLLAMA_HOST || 'http://localhost:11434';
-const DEFAULT_OLLAMA_MODEL = process.env.EVERMIND_OLLAMA_MODEL || 'llama3';
 
 export function loadConfig(): Config {
   let vaultPath = DEFAULT_VAULT_PATH;
@@ -42,10 +37,7 @@ export function loadConfig(): Config {
     vaultPath: path.resolve(vaultPath),
     inboxSubdir: DEFAULT_INBOX_SUBDIR,
     attachmentsSubdir: DEFAULT_ATTACHMENTS_SUBDIR,
-    geminiApiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY,
-    ollamaHost: DEFAULT_OLLAMA_HOST,
-    ollamaModel: DEFAULT_OLLAMA_MODEL,
-    fallbackThreshold: isNaN(DEFAULT_THRESHOLD) ? 0.6 : DEFAULT_THRESHOLD,
-    runLlmSynthesis: DEFAULT_RUN_LLM
+    exaApiKey: process.env.EXA_API_KEY,
+    fallbackThreshold: isNaN(DEFAULT_THRESHOLD) ? 0.6 : DEFAULT_THRESHOLD
   };
 }
