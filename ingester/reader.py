@@ -69,14 +69,21 @@ def parse_frontmatter_and_body(md_text: str) -> Tuple[Dict[str, Any], str]:
           if stripped_line.startswith("#"):
               continue
 
-          if raw_line.startswith("  - ") and current_list_key is not None:
-              item = stripped_line[2:].strip()
-              if item.startswith(("'", '"')) and item.endswith(item[0]) and len(item) >= 2:
-                  item = item[1:-1]
-              existing = frontmatter.get(current_list_key)
-              if isinstance(existing, list):
-                  existing.append(_coerce_frontmatter_value(item))
-              continue
+          if current_list_key is not None:
+              if stripped_line.startswith("- "):
+                  item = stripped_line[2:].strip()
+              elif stripped_line.startswith("-"):
+                  item = stripped_line[1:].strip()
+              else:
+                  item = None
+
+              if item is not None:
+                  if item.startswith(("'", '"')) and item.endswith(item[0]) and len(item) >= 2:
+                      item = item[1:-1]
+                  existing = frontmatter.get(current_list_key)
+                  if isinstance(existing, list):
+                      existing.append(_coerce_frontmatter_value(item))
+                  continue
 
           if ":" not in line:
               continue

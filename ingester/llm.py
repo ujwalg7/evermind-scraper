@@ -11,19 +11,19 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 class SynthesisOutput(BaseModel):
-  why_it_matters: str = Field(description="One-line rationale for why this note should be retained.")
-  related: list[str] = Field(default_factory=list, description="Related names or entities.")
-  tags: list[str] = Field(default_factory=list, description="Compact topic tags.")
+    why_it_matters: str = Field(description="One-line rationale for why this note should be retained.")
+    related: list[str] = Field(default_factory=list, description="Related names or entities.")
+    tags: list[str] = Field(default_factory=list, description="Compact topic tags.")
 
 
 def _resolve_model_reference() -> str:
     """Return a PydanticAI model reference."""
-  provider = os.getenv("EVERMIND_INGESTER_LLM_PROVIDER", "openai").lower()
-  model = os.getenv("EVERMIND_INGESTER_LLM_MODEL", "openai:gpt-4o-mini")
+    provider = os.getenv("EVERMIND_INGESTER_LLM_PROVIDER", "openai").lower()
+    model = os.getenv("EVERMIND_INGESTER_LLM_MODEL", "openai:gpt-4o-mini")
 
-  if ":" in model:
-    return model
-  return f"{provider}:{model}"
+    if ":" in model:
+        return model
+    return f"{provider}:{model}"
 
 
 def _resolve_openrouter_model(openrouter_model: str):
@@ -80,40 +80,40 @@ def _resolve_openrouter_model(openrouter_model: str):
 
 
 def _build_agent(model: str):
-  try:
-    from pydantic_ai import Agent
-  except Exception:
-      log.info("PydanticAI is unavailable; skipping synthesis.")
-    return None
+    try:
+        from pydantic_ai import Agent
+    except Exception:
+        log.info("PydanticAI is unavailable; skipping synthesis.")
+        return None
 
-  if model.startswith("openrouter:"):
-      openrouter_model = model.split(":", 1)[1].strip()
-      adapter = _resolve_openrouter_model(openrouter_model)
-      if adapter is not None:
-          try:
-              return Agent(
-                  model=adapter,
-                  output_type=SynthesisOutput,
-                  system_prompt="Produce concise notes for an article summary with few claims."
-              )
-          except Exception as exc:
-              log.warning("Failed to construct OpenRouter adapter agent for %s: %s", openrouter_model, exc)
+    if model.startswith("openrouter:"):
+        openrouter_model = model.split(":", 1)[1].strip()
+        adapter = _resolve_openrouter_model(openrouter_model)
+        if adapter is not None:
+            try:
+                return Agent(
+                    model=adapter,
+                    output_type=SynthesisOutput,
+                    system_prompt="Produce concise notes for an article summary with few claims."
+                )
+            except Exception as exc:
+                log.warning("Failed to construct OpenRouter adapter agent for %s: %s", openrouter_model, exc)
 
-      fallback = f"openai:{openrouter_model}"
-      return Agent(
-          model=fallback,
-          output_type=SynthesisOutput,
-          system_prompt="Produce concise notes for an article summary with few claims."
-      )
+        fallback = f"openai:{openrouter_model}"
+        return Agent(
+            model=fallback,
+            output_type=SynthesisOutput,
+            system_prompt="Produce concise notes for an article summary with few claims."
+        )
 
-  return Agent(
-    model=model,
-    output_type=SynthesisOutput,
-    system_prompt="Produce concise notes for an article summary with few claims."
-  )
+    return Agent(
+        model=model,
+        output_type=SynthesisOutput,
+        system_prompt="Produce concise notes for an article summary with few claims."
+    )
 
 
-def summarize_note_content(note: CuratedNote) -> Optional[Dict[str, object]]:
+def summarize_note_content(note: Any) -> Optional[Dict[str, object]]:
     try:
         from pydantic_ai.exceptions import ModelHTTPError
     except Exception:
@@ -128,20 +128,20 @@ def summarize_note_content(note: CuratedNote) -> Optional[Dict[str, object]]:
     if agent is None:
         return None
 
-  prompt = (
-    "Create a compact takeaway summary for the following capture.\n\n"
-    f"Title: {note.title}\n"
-    f"Source URL: {note.source_url}\n\n"
-    f"Captured content:\n{note.source_content}\n"
-  )
+    prompt = (
+        "Create a compact takeaway summary for the following capture.\n\n"
+        f"Title: {note.title}\n"
+        f"Source URL: {note.source_url}\n\n"
+        f"Captured content:\n{note.source_content}\n"
+    )
 
-  try:
-    result = agent.run_sync(prompt)
-    payload = result.output
-    return payload.model_dump()
-  except ModelHTTPError as exc:
-      log.warning("LLM HTTP error during synthesis for %s: %s", note.source_url, exc)
-    return None
-  except Exception as exc:
-      log.warning("LLM synthesis failed for %s: %s", note.source_url, exc)
-    return None
+    try:
+        result = agent.run_sync(prompt)
+        payload = result.output
+        return payload.model_dump()
+    except ModelHTTPError as exc:
+        log.warning("LLM HTTP error during synthesis for %s: %s", note.source_url, exc)
+        return None
+    except Exception as exc:
+        log.warning("LLM synthesis failed for %s: %s", note.source_url, exc)
+        return None

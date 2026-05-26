@@ -145,7 +145,8 @@ function normalizeTitle(rawTitle: string, url: string): string {
  * Detects if the extracted text belongs to a paywall, cookie wall, or human validation page.
  */
 function detectPaywallOrCookieWall(text: string): boolean {
-  const lowercaseText = text.toLowerCase();
+  const textPreview = text.slice(0, 1000).toLowerCase();
+  const lowercaseText = textPreview;
   for (const pattern of LOW_QUALITY_PATTERNS) {
     if (lowercaseText.includes(pattern)) {
       return true;
@@ -172,7 +173,8 @@ export function isLikelyLowQualityCapture(text: string, title: string = '', sour
   const normalizedText = (text || '').toLowerCase();
   const normalizedTitle = (title || '').toLowerCase();
   const normalizedUrl = (sourceUrl || '').toLowerCase();
-  const combined = `${normalizedText} ${normalizedTitle} ${normalizedUrl}`.trim();
+  const textPreview = normalizedText.slice(0, 1000);
+  const combined = `${textPreview} ${normalizedTitle} ${normalizedUrl}`.trim();
 
   if (!combined) {
     return true;

@@ -81,6 +81,24 @@ def test_parse_frontmatter_keeps_yaml_lists_and_rich_values():
     assert frontmatter["ratings"] == [1, 2]
 
 
+def test_parse_frontmatter_handles_alternative_list_indent_styles():
+    frontmatter, _ = parse_frontmatter_and_body(
+        "---\n"
+        "title: Meta List\n"
+        "tags:\n"
+        "- first\n"
+        "- second\n"
+        "topics:\n"
+        "    - alpha\n"
+        "    - beta\n"
+        "---\n"
+        "Body remains.\n"
+    )
+
+    assert frontmatter["tags"] == ["first", "second"]
+    assert frontmatter["topics"] == ["alpha", "beta"]
+
+
 def test_curate_from_raw_moves_processed_notes_and_survives_missing_source_url(tmp_path: Path):
     raw_dir = tmp_path / "inbox" / "raw"
     raw_dir.mkdir(parents=True)

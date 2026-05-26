@@ -378,10 +378,12 @@ describe('Article-to-Obsidian Pipeline Tests', () => {
   it('should classify blocked/short captures as low quality', () => {
     const blockedText = 'Please accept all cookies to continue reading this article.';
     const shortText = 'just a moment';
+    const longTextWithFooterCookie = `${'This article is long enough to pass quality checks. '.repeat(80)}\nPlease accept all cookies to continue reading this article.`;
 
     assert.strictEqual(isLikelyLowQualityCapture(blockedText, 'Some title', 'https://example.com/cookie'), true);
     assert.strictEqual(isLikelyLowQualityCapture(shortText, 'Short Title', 'https://example.com/captcha'), true);
     assert.strictEqual(isLikelyLowQualityCapture('This is a long-form article with useful details and many paragraphs of durable evidence. '.repeat(8), 'Valid Article', 'https://example.com/valid'), false);
+    assert.strictEqual(isLikelyLowQualityCapture(longTextWithFooterCookie, 'Legitimate Article', 'https://example.com/long'), false);
   });
 
   // Test 9: Metadata & Fingerprint Stability
